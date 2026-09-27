@@ -1,0 +1,12 @@
+services:
+  app:
+    build: .
+    image: evidence-chain-orchestrator
+    ports:
+      - "8080:8080"
+    volumes:
+      - evidence-data:/data
+    restart: unless-stopped
+
+volumes:
+  evidence-data:
