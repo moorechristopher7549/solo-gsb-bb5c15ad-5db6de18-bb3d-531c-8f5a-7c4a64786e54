@@ -172,3 +172,52 @@ export interface TimeWindowHighlight {
   /** 需要定位的越界固定卡 id 列表 */
   outOfRange: string[];
 }
+
+/* ---------- 导入差异预览（只读） ---------- */
+
+/** 参与逐字段比较的卡片字段 */
+export type ImportFieldName = 'title' | 'source' | 'occurredAt' | 'description';
+
+export interface ImportFieldChange {
+  field: ImportFieldName;
+  before: string;
+  after: string;
+}
+
+export interface ImportCardRef {
+  id: string;
+  title: string;
+}
+
+export interface ImportModifiedCard extends ImportCardRef {
+  changes: ImportFieldChange[];
+}
+
+export interface ImportEdgeRef {
+  fromId: string;
+  toId: string;
+  fromTitle: string;
+  toTitle: string;
+}
+
+export interface ImportDiff {
+  addedCards: ImportCardRef[];
+  removedCards: ImportCardRef[];
+  modifiedCards: ImportModifiedCard[];
+  addedEdges: ImportEdgeRef[];
+  removedEdges: ImportEdgeRef[];
+  counts: {
+    addedCards: number;
+    removedCards: number;
+    modifiedCards: number;
+    addedEdges: number;
+    removedEdges: number;
+  };
+}
+
+/** POST /api/import/preview 响应 */
+export interface ImportPreviewResult {
+  /** 一次性确认令牌：绑定预览时的当前图指纹与文件内容哈希 */
+  token: string;
+  diff: ImportDiff;
+}

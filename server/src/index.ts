@@ -4,8 +4,19 @@ import path from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { db, getEdges, getEvidence } from './db';
 import { analyzeMustPass, analyzeTimeWindow, cycleAfterAdding, findBypassPath, findCycle, findRedundantEdges, mergeConflict, planMergeEdges, planPrune, queryOrder, topoLevels } from './graph';
+import {
+  checkPreviewToken,
+  computeImportDiff,
+  createPreviewToken,
+  deletePreviewToken,
+  graphFingerprint,
+  parseEvidenceInput,
+  parseSnapshot,
+  snapshotHash,
+  toEvidenceRows,
+} from './importing';
 import { resetWithSample, seedIfEmpty } from './seed';
-import type { BypassPathResult, Evidence, GraphState, MustPassResult, OrderQueryResult, OrderWitness, PruneResult, RedundancyReport, TimeWindowResult } from './types';
+import type { BypassPathResult, GraphState, MustPassResult, OrderQueryResult, OrderWitness, PruneResult, RedundancyReport, TimeWindowResult } from './types';
 
 const app = express();
 app.use(express.json({ limit: '5mb' }));
@@ -21,38 +32,6 @@ function buildState(): GraphState {
 }
 
 /* ---------- 输入校验 ---------- */
-
-interface EvidenceInput {
-  title: string;
-  description: string;
-  source: string;
-  occurredAt: string | null;
-}
-
-function cleanString(v: unknown, max: number): string {
-  return typeof v === 'string' ? v.trim().slice(0, max) : '';
-}
-
-function parseEvidenceInput(body: unknown): { ok: true; value: EvidenceInput } | { ok: false; message: string } {
-  const b = (body ?? {}) as Record<string, unknown>;
-  const title = cleanString(b.title, 200);
-  if (!title) return { ok: false, message: '标题不能为空' };
-  let occurredAt: string | null = null;
-  if (typeof b.occurredAt === 'string' && b.occurredAt.trim()) {
-    const t = b.occurredAt.trim();
-    if (Number.isNaN(Date.parse(t))) return { ok: false, message: '发生时间格式无效' };
-    occurredAt = t;
-  }
-  return {
-    ok: true,
-    value: {
-      title,
-      description: cleanString(b.description, 2000),
-      source: cleanString(b.source, 200),
-      occurredAt,
-    },
-  };
-}
 
 /* ---------- 时间窗口分析的时间口径 ---------- */
 
@@ -450,63 +429,153 @@ app.get('/api/export', (_req, res) => {
   res.json(snapshot);
 });
 
-app.post('/api/import', (req, res) => {
-  const body = req.body as { evidence?: unknown; edges?: unknown };
-  if (!Array.isArray(body?.evidence) || !Array.isArray(body?.edges)) {
-    return res.status(400).json({ message: '快照格式错误：需要 evidence 与 edges 数组' });
-  }
-  if (body.evidence.length > 2000 || body.edges.length > 10000) {
-    return res.status(400).json({ message: '快照过大，已拒绝导入' });
-  }
-
-  const now = new Date().toISOString();
-  const items: Evidence[] = [];
-  const seen = new Set<string>();
-  for (const raw of body.evidence as Array<Record<string, unknown>>) {
-    const parsed = parseEvidenceInput(raw);
-    if (!parsed.ok) return res.status(400).json({ message: `证据「${cleanString(raw?.title, 50) || '?'}」：${parsed.message}` });
-    const id = typeof raw?.id === 'string' && raw.id ? raw.id.slice(0, 64) : crypto.randomUUID();
-    if (seen.has(id)) return res.status(400).json({ message: `证据 id 重复：${id}` });
-    seen.add(id);
-    items.push({
-      id,
-      ...parsed.value,
-      createdAt: typeof raw?.createdAt === 'string' ? raw.createdAt : now,
-      updatedAt: now,
-    });
-  }
-
-  const edges: Array<{ fromId: string; toId: string }> = [];
-  const edgeSeen = new Set<string>();
-  for (const raw of body.edges as Array<Record<string, unknown>>) {
-    const fromId = raw?.from ?? raw?.fromId;
-    const toId = raw?.to ?? raw?.toId;
-    if (typeof fromId !== 'string' || typeof toId !== 'string' || !seen.has(fromId) || !seen.has(toId)) {
-      return res.status(400).json({ message: '存在指向未知证据的连线，快照已拒绝' });
-    }
-    const key = `${fromId}->${toId}`;
-    if (edgeSeen.has(key)) continue;
-    edgeSeen.add(key);
-    edges.push({ fromId, toId });
-  }
-
-  const cycle = findCycle(items.map((i) => i.id), edges);
-  if (cycle) {
-    return res.status(422).json({ message: '导入被拒绝：快照中存在循环依赖', cycle });
-  }
-
+/** 整体替换为给定快照（调用方须已完成解析、环校验与差异确认） */
+function replaceWithSnapshot(cards: ReturnType<typeof toEvidenceRows>, edges: Array<{ fromId: string; toId: string }>, now: string): void {
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM edges').run();
     db.prepare('DELETE FROM evidence').run();
     const insE = db.prepare(
       'INSERT INTO evidence (id, title, description, source, occurred_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
     );
-    for (const it of items) insE.run(it.id, it.title, it.description, it.source, it.occurredAt, it.createdAt, it.updatedAt);
+    for (const it of cards) insE.run(it.id, it.title, it.description, it.source, it.occurredAt, it.createdAt, it.updatedAt);
     const insX = db.prepare('INSERT INTO edges (from_id, to_id, created_at) VALUES (?, ?, ?)');
     for (const e of edges) insX.run(e.fromId, e.toId, now);
   });
   tx();
+}
+
+/**
+ * 兼容直接导入：沿用与预览相同的解析与环校验，合法后整体替换。
+ * 新前端流程为 /api/import/preview → /api/import/confirm。
+ */
+app.post('/api/import', (req, res) => {
+  const now = new Date().toISOString();
+  const parsed = parseSnapshot(req.body, now);
+  if (!parsed.ok) return res.status(400).json({ message: parsed.message });
+  const cycle = findCycle(parsed.cards.map((i) => i.id), parsed.edges);
+  if (cycle) {
+    return res.status(422).json({ message: '导入被拒绝：快照中存在循环依赖', cycle });
+  }
+  replaceWithSnapshot(toEvidenceRows(parsed.cards, now), parsed.edges, now);
   res.json(buildState());
+});
+
+/* ---------- 导入差异预览与确认 ---------- */
+
+/** 事务内终止提交并回滚（整体替换绝不留半截状态） */
+class ImportAbortError extends Error {
+  status: number;
+  payload: Record<string, unknown>;
+  constructor(status: number, payload: Record<string, unknown>) {
+    super('import aborted');
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
+/**
+ * 差异预览（只读）：沿用导入的整套校验解析文件，再按证据 id / 连线两端 id
+ * 与当前图逐项比较，返回新增、删除、修改的卡片与新增、删除的连线及数量。
+ * 预览结果同时绑定「当前图指纹 + 文件内容哈希」，随一次性令牌返回。
+ * 含环快照在预览阶段就按 422 拒绝。
+ */
+app.post('/api/import/preview', (req, res) => {
+  const body = (req.body ?? {}) as { snapshotText?: unknown };
+  if (typeof body.snapshotText !== 'string') {
+    return res.status(400).json({ message: '缺少快照文件内容（snapshotText）' });
+  }
+  const fileText = body.snapshotText;
+  let parsedBody: unknown;
+  try {
+    parsedBody = JSON.parse(fileText);
+  } catch {
+    return res.status(400).json({ message: '导入失败：文件不是合法 JSON' });
+  }
+  const parsed = parseSnapshot(parsedBody, new Date().toISOString());
+  if (!parsed.ok) return res.status(400).json({ message: parsed.message });
+  const cycle = findCycle(parsed.cards.map((i) => i.id), parsed.edges);
+  if (cycle) {
+    return res.status(422).json({ message: '导入被拒绝：快照中存在循环依赖', cycle });
+  }
+
+  const evidence = getEvidence();
+  const edges = getEdges();
+  const diff = computeImportDiff(
+    { evidence, edges },
+    { cards: parsed.cards, edges: parsed.edges },
+  );
+  const token = createPreviewToken(snapshotHash(fileText), graphFingerprint(evidence, edges));
+  res.json({ token, diff });
+});
+
+/**
+ * 确认导入：在单个事务内重新校验「预览令牌仍有效、文件内容未变、当前图未变、
+ * 快照重新解析后仍合法且无环」，任一变化即拒绝覆盖并要求重新预览；
+ * 全部通过才整体替换。
+ */
+app.post('/api/import/confirm', (req, res) => {
+  const body = (req.body ?? {}) as { token?: unknown; snapshotText?: unknown };
+  if (typeof body.token !== 'string' || typeof body.snapshotText !== 'string') {
+    return res.status(400).json({ message: '缺少确认令牌或快照文件内容' });
+  }
+  const token = body.token;
+  const fileText = body.snapshotText;
+  const now = new Date().toISOString();
+
+  let state: GraphState | null = null;
+  const tx = db.transaction(() => {
+    const evidence = getEvidence();
+    const edges = getEdges();
+    const match = checkPreviewToken(token, snapshotHash(fileText), graphFingerprint(evidence, edges));
+    if (!match.ok) {
+      deletePreviewToken(token);
+      const messages: Record<typeof match.reason, string> = {
+        'token-expired': '预览已过期，请重新预览后再导入',
+        'file-changed': '文件内容在预览后发生变化，请重新选择文件并预览',
+        'graph-changed': '当前证据链在预览后发生变化，请重新预览确认差异后再导入',
+      };
+      throw new ImportAbortError(409, { message: messages[match.reason], code: 'import-stale' });
+    }
+
+    // 即便文件逐字节未变，也在事务内完整重跑解析与环校验，任一不过即拒绝
+    let parsedBody: unknown;
+    try {
+      parsedBody = JSON.parse(fileText);
+    } catch {
+      deletePreviewToken(token);
+      throw new ImportAbortError(400, { message: '导入失败：文件不是合法 JSON' });
+    }
+    const parsed = parseSnapshot(parsedBody, now);
+    if (!parsed.ok) {
+      deletePreviewToken(token);
+      throw new ImportAbortError(400, { message: parsed.message });
+    }
+    const cycle = findCycle(parsed.cards.map((i) => i.id), parsed.edges);
+    if (cycle) {
+      deletePreviewToken(token);
+      throw new ImportAbortError(422, { message: '导入被拒绝：快照中存在循环依赖', cycle });
+    }
+
+    const rows = toEvidenceRows(parsed.cards, now);
+    db.prepare('DELETE FROM edges').run();
+    db.prepare('DELETE FROM evidence').run();
+    const insE = db.prepare(
+      'INSERT INTO evidence (id, title, description, source, occurred_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    );
+    for (const it of rows) insE.run(it.id, it.title, it.description, it.source, it.occurredAt, it.createdAt, it.updatedAt);
+    const insX = db.prepare('INSERT INTO edges (from_id, to_id, created_at) VALUES (?, ?, ?)');
+    for (const e of parsed.edges) insX.run(e.fromId, e.toId, now);
+    deletePreviewToken(token);
+    state = buildState();
+  });
+
+  try {
+    tx();
+  } catch (e) {
+    if (e instanceof ImportAbortError) return res.status(e.status).json(e.payload);
+    throw e;
+  }
+  res.json(state);
 });
 
 app.post('/api/seed', (_req, res) => {

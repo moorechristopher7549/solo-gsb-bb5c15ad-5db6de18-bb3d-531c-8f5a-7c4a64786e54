@@ -3,12 +3,13 @@ import { api, ApiError } from './api';
 import Board from './components/Board';
 import CardForm from './components/CardForm';
 import ConflictBanner from './components/ConflictBanner';
+import ImportPreviewDialog from './components/ImportPreviewDialog';
 import MustPassPanel from './components/MustPassPanel';
 import OrderQueryPanel from './components/OrderQueryPanel';
 import PrunePanel from './components/PrunePanel';
 import TimeWindowPanel from './components/TimeWindowPanel';
 import TimelinePanel from './components/TimelinePanel';
-import type { Evidence, EvidenceFormValues, GraphState, MergeConflict, MustPassHighlight, OrderWitness, RedundantEdge, TimeWindowHighlight } from './types';
+import type { Evidence, EvidenceFormValues, GraphState, ImportDiff, MergeConflict, MustPassHighlight, OrderWitness, RedundantEdge, TimeWindowHighlight } from './types';
 
 export interface Conflict {
   cycle: string[];
@@ -35,6 +36,10 @@ export default function App() {
   const [mustPassHL, setMustPassHL] = useState<MustPassHighlight | null>(null);
   /** 时间窗口分析：画布上的冲突路径 / 越界定位（由 TimeWindowPanel 全权维护） */
   const [timeWindowHL, setTimeWindowHL] = useState<TimeWindowHighlight | null>(null);
+  /** JSON 导入差异预览：令牌 + 原始文件内容与当前图/文件绑定；staleMessage 非空时确认按钮禁用 */
+  const [importPreview, setImportPreview] = useState<
+    { fileName: string; snapshotText: string; token: string; diff: ImportDiff; staleMessage: string | null } | null
+  >(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -70,11 +75,12 @@ export default function App() {
         setEditing(null);
         setOrderPath(null);
         setOrderPreview(null);
+        setImportPreview((p) => (p && !busy ? null : p));
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [busy]);
 
   const handleApiError = useCallback((e: unknown) => {
     if (e instanceof ApiError && e.payload.cycle) {
@@ -198,20 +204,63 @@ export default function App() {
     [mergeMode, mergeCards],
   );
 
+  /** 请求服务端差异预览（只读）：沿用导入校验并计算快照与当前图的差异 */
+  const requestPreview = useCallback(
+    async (fileName: string, text: string) => {
+      setBusy(true);
+      try {
+        const result = await api.importPreview(text);
+        setImportPreview({ fileName, snapshotText: text, token: result.token, diff: result.diff, staleMessage: null });
+        setError(null);
+      } catch (e) {
+        handleApiError(e);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [handleApiError],
+  );
+
   const onImportFile = useCallback(
     async (file: File) => {
-      let payload: unknown;
+      let text: string;
       try {
-        payload = JSON.parse(await file.text());
+        text = await file.text();
       } catch {
-        setError('导入失败：文件不是合法 JSON');
+        setError('导入失败：无法读取文件');
         return;
       }
-      if (!window.confirm('导入将覆盖当前全部证据与连线，确定继续？')) return;
-      await run(() => api.importSnapshot(payload));
+      await requestPreview(file.name, text);
     },
-    [run],
+    [requestPreview],
   );
+
+  /** 确认导入：服务端在事务内重新校验文件内容与当前图；任一变化则拒绝覆盖并要求重新预览 */
+  const confirmImport = useCallback(async () => {
+    if (!importPreview) return;
+    setBusy(true);
+    try {
+      setState(await api.importConfirm(importPreview.token, importPreview.snapshotText));
+      setImportPreview(null);
+      setConflict(null);
+      setLinkFrom(null);
+      setError(null);
+    } catch (e) {
+      if (e instanceof ApiError && e.payload.code === 'import-stale') {
+        setImportPreview((p) => (p ? { ...p, staleMessage: e.message } : p));
+      } else {
+        handleApiError(e);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }, [importPreview, handleApiError]);
+
+  /** 预览失效后用同一文件内容重新生成预览 */
+  const repreviewImport = useCallback(() => {
+    if (!importPreview) return;
+    void requestPreview(importPreview.fileName, importPreview.snapshotText);
+  }, [importPreview, requestPreview]);
 
   const loadSample = useCallback(() => {
     if (!window.confirm('载入示例将覆盖当前全部数据，确定继续？')) return;
@@ -385,6 +434,18 @@ export default function App() {
           busy={busy}
           onSubmit={submitCard}
           onClose={() => setEditing(null)}
+        />
+      )}
+
+      {importPreview && (
+        <ImportPreviewDialog
+          fileName={importPreview.fileName}
+          diff={importPreview.diff}
+          busy={busy}
+          staleMessage={importPreview.staleMessage}
+          onConfirm={confirmImport}
+          onRepreview={repreviewImport}
+          onCancel={() => setImportPreview(null)}
         />
       )}
     </div>

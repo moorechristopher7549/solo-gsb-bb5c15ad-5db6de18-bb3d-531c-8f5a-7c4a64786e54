@@ -1197,3 +1197,244 @@ body {
   gap: 10px;
   margin-top: 4px;
 }
+
+/* ---------- 导入差异预览弹窗 ---------- */
+
+.modal.import-preview {
+  width: min(720px, 100%);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  padding: 22px 24px 18px;
+}
+
+.modal.import-preview h2 {
+  margin-bottom: 10px;
+}
+
+.ip-file {
+  margin: 0 0 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.ip-file b {
+  color: var(--text);
+  word-break: break-all;
+}
+
+.ip-hint {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.ip-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.ip-tag {
+  font-size: 12.5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  white-space: nowrap;
+}
+
+.ip-tag.add {
+  color: var(--ok);
+  border-color: rgba(74, 222, 128, 0.45);
+  background: rgba(74, 222, 128, 0.1);
+}
+
+.ip-tag.remove {
+  color: var(--danger);
+  border-color: rgba(255, 92, 108, 0.45);
+  background: rgba(255, 92, 108, 0.1);
+}
+
+.ip-tag.modify {
+  color: var(--accent);
+  border-color: rgba(139, 147, 255, 0.5);
+  background: rgba(139, 147, 255, 0.1);
+}
+
+.ip-nochange {
+  margin: 0 0 12px;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+
+.ip-sections {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-right: 4px;
+  min-height: 40px;
+}
+
+.ip-section {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-soft);
+  overflow: hidden;
+}
+
+.ip-section-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.ip-section-head:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.ip-caret {
+  width: 14px;
+  color: var(--muted);
+}
+
+.ip-section-title {
+  flex: 1;
+}
+
+.ip-count {
+  min-width: 26px;
+  text-align: center;
+  font-weight: 600;
+  font-size: 13px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+
+.ip-add .ip-count {
+  color: var(--ok);
+  border-color: rgba(74, 222, 128, 0.45);
+}
+
+.ip-remove .ip-count {
+  color: var(--danger);
+  border-color: rgba(255, 92, 108, 0.45);
+}
+
+.ip-modify .ip-count {
+  color: var(--accent);
+  border-color: rgba(139, 147, 255, 0.5);
+}
+
+.ip-section-body {
+  border-top: 1px solid var(--border);
+  padding: 8px 12px 10px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.ip-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ip-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.ip-card-title {
+  flex: 1;
+  word-break: break-word;
+}
+
+.ip-card-id {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.ip-edge b {
+  color: var(--accent);
+}
+
+.ip-modify-list li {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--border);
+}
+
+.ip-modify-list li:last-child {
+  border-bottom: none;
+}
+
+.ip-fields {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ip-field {
+  display: flex;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.ip-field dt {
+  flex-shrink: 0;
+  width: 64px;
+  color: var(--muted);
+}
+
+.ip-field dd {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  word-break: break-word;
+}
+
+.ip-old {
+  color: var(--danger);
+  text-decoration: line-through;
+  text-decoration-color: rgba(255, 92, 108, 0.6);
+}
+
+.ip-new {
+  color: var(--ok);
+}
+
+.ip-arrow {
+  color: var(--muted);
+}
+
+.ip-stale {
+  margin: 12px 0 0;
+}

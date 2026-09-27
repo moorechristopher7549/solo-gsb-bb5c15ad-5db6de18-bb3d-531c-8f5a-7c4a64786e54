@@ -1,9 +1,9 @@
-import type { BypassPathResult, EvidenceFormValues, GraphState, MergeConflictKind, MustPassResult, OrderQueryResult, PruneResult, RedundantEdge, TimeWindowResult } from './types';
+import type { BypassPathResult, EvidenceFormValues, GraphState, ImportPreviewResult, MergeConflictKind, MustPassResult, OrderQueryResult, PruneResult, RedundantEdge, TimeWindowResult } from './types';
 
 export class ApiError extends Error {
   status: number;
-  payload: { message?: string; cycle?: string[]; merge?: { kind: MergeConflictKind; path: string[] } };
-  constructor(status: number, payload: { message?: string; cycle?: string[]; merge?: { kind: MergeConflictKind; path: string[] } }) {
+  payload: { message?: string; code?: string; cycle?: string[]; merge?: { kind: MergeConflictKind; path: string[] } };
+  constructor(status: number, payload: { message?: string; code?: string; cycle?: string[]; merge?: { kind: MergeConflictKind; path: string[] } }) {
     super(payload.message ?? `请求失败（${status}）`);
     this.status = status;
     this.payload = payload;
@@ -12,7 +12,12 @@ export class ApiError extends Error {
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
-  const data = (await res.json().catch(() => ({}))) as { message?: string; cycle?: string[]; merge?: { kind: MergeConflictKind; path: string[] } };
+  const data = (await res.json().catch(() => ({}))) as {
+    message?: string;
+    code?: string;
+    cycle?: string[];
+    merge?: { kind: MergeConflictKind; path: string[] };
+  };
   if (!res.ok) throw new ApiError(res.status, data);
   return data as T;
 }
@@ -48,6 +53,11 @@ export const api = {
     request<TimeWindowResult>(
       `/api/time-window?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&gap=${encodeURIComponent(String(gapMinutes))}`,
     ),
-  importSnapshot: (payload: unknown) => request<GraphState>('/api/import', json('POST', payload)),
+  /** 导入差异预览（只读）：服务端沿用导入校验，返回与当前图的逐项差异和一次性确认令牌 */
+  importPreview: (snapshotText: string) =>
+    request<ImportPreviewResult>('/api/import/preview', json('POST', { snapshotText })),
+  /** 确认导入：服务端在事务内重新校验令牌、文件内容与当前图，全部一致才整体替换 */
+  importConfirm: (token: string, snapshotText: string) =>
+    request<GraphState>('/api/import/confirm', json('POST', { token, snapshotText })),
   seed: () => request<GraphState>('/api/seed', { method: 'POST' }),
 };
