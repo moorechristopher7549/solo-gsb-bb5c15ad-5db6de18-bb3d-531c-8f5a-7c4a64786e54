@@ -159,3 +159,56 @@ export interface TimeWindowResult {
   /** feasible=false 且无越界固定卡时：导致上下界冲突的真实约束路径 */
   conflict: TimeWindowBoundConflict | null;
 }
+
+/* ---------- 导入差异预览（只读） ---------- */
+
+/** 预览中的卡片四要素视图 */
+export interface ImportCardView {
+  id: string;
+  title: string;
+  source: string;
+  occurredAt: string | null;
+  description: string;
+}
+
+/** 参与比较的卡片字段 */
+export type ImportDiffField = 'title' | 'source' | 'occurredAt' | 'description';
+
+export interface ImportFieldChange {
+  field: ImportDiffField;
+  before: string;
+  after: string;
+}
+
+/** 同 id 卡片中发生修改的一张及其逐字段变化 */
+export interface ImportModifiedCard {
+  id: string;
+  title: string;
+  changes: ImportFieldChange[];
+}
+
+/** 连线差异（按两端 id 比较，标题仅用于前端展示） */
+export interface ImportEdgeChange {
+  fromId: string;
+  toId: string;
+  fromTitle: string;
+  toTitle: string;
+}
+
+/** 导入差异预览结果：绑定当前图与文件内容的只读对照 */
+export interface ImportPreview {
+  added: ImportCardView[];
+  deleted: ImportCardView[];
+  modified: ImportModifiedCard[];
+  edgesAdded: ImportEdgeChange[];
+  edgesDeleted: ImportEdgeChange[];
+  counts: {
+    added: number;
+    deleted: number;
+    modified: number;
+    edgesAdded: number;
+    edgesDeleted: number;
+  };
+  /** 确认导入时回传的绑定令牌（绑定当前图指纹与快照指纹，HMAC 签名、30 分钟有效） */
+  token: string;
+}

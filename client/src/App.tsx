@@ -3,12 +3,13 @@ import { api, ApiError } from './api';
 import Board from './components/Board';
 import CardForm from './components/CardForm';
 import ConflictBanner from './components/ConflictBanner';
+import ImportPreviewModal from './components/ImportPreviewModal';
 import MustPassPanel from './components/MustPassPanel';
 import OrderQueryPanel from './components/OrderQueryPanel';
 import PrunePanel from './components/PrunePanel';
 import TimeWindowPanel from './components/TimeWindowPanel';
 import TimelinePanel from './components/TimelinePanel';
-import type { Evidence, EvidenceFormValues, GraphState, MergeConflict, MustPassHighlight, OrderWitness, RedundantEdge, TimeWindowHighlight } from './types';
+import type { Evidence, EvidenceFormValues, GraphState, ImportPreview, MergeConflict, MustPassHighlight, OrderWitness, RedundantEdge, TimeWindowHighlight } from './types';
 
 export interface Conflict {
   cycle: string[];
@@ -35,6 +36,10 @@ export default function App() {
   const [mustPassHL, setMustPassHL] = useState<MustPassHighlight | null>(null);
   /** 时间窗口分析：画布上的冲突路径 / 越界定位（由 TimeWindowPanel 全权维护） */
   const [timeWindowHL, setTimeWindowHL] = useState<TimeWindowHighlight | null>(null);
+  /** 导入差异预览：{ 预览结果, 原始文件内容, 文件名 }；null 表示未在预览 */
+  const [importPreview, setImportPreview] = useState<{ preview: ImportPreview; payload: unknown; fileName: string } | null>(null);
+  /** 预览确认时被服务端拒绝（图或文件已变化），弹窗内提示重新预览 */
+  const [importStale, setImportStale] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -198,6 +203,24 @@ export default function App() {
     [mergeMode, mergeCards],
   );
 
+  /** 选文件后：解析 JSON → 服务端沿用导入校验做只读差异预览（含环快照在此被拒绝） */
+  const requestImportPreview = useCallback(
+    async (payload: unknown, fileName: string) => {
+      setBusy(true);
+      try {
+        const preview = await api.importPreview(payload);
+        setImportPreview({ preview: { ...preview, fileName }, payload, fileName });
+        setImportStale(false);
+        setError(null);
+      } catch (e) {
+        handleApiError(e);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [handleApiError],
+  );
+
   const onImportFile = useCallback(
     async (file: File) => {
       let payload: unknown;
@@ -207,11 +230,48 @@ export default function App() {
         setError('导入失败：文件不是合法 JSON');
         return;
       }
-      if (!window.confirm('导入将覆盖当前全部证据与连线，确定继续？')) return;
-      await run(() => api.importSnapshot(payload));
+      await requestImportPreview(payload, file.name);
     },
-    [run],
+    [requestImportPreview],
   );
+
+  /** 取消预览：不做任何改动 */
+  const cancelImportPreview = useCallback(() => {
+    setImportPreview(null);
+    setImportStale(false);
+  }, []);
+
+  /**
+   * 确认导入：服务端在单个事务内重新校验「当前图指纹 + 文件指纹」（任一变化即拒绝覆盖）
+   * 并复核环检测，全部通过才整体替换。
+   */
+  const confirmImport = useCallback(async () => {
+    if (!importPreview) return;
+    setBusy(true);
+    try {
+      const next = await api.importSnapshot(importPreview.payload, importPreview.preview.token);
+      setState(next);
+      setImportPreview(null);
+      setImportStale(false);
+      setConflict(null);
+      setLinkFrom(null);
+      setError(null);
+    } catch (e) {
+      if (e instanceof ApiError && e.payload.stale) {
+        setImportStale(true);
+      } else if (e instanceof ApiError && e.payload.cycle) {
+        setConflict({ cycle: e.payload.cycle, message: e.payload.message ?? e.message });
+        setImportPreview(null);
+        setImportStale(false);
+      } else {
+        setError(e instanceof Error ? e.message : '导入失败');
+        setImportPreview(null);
+        setImportStale(false);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }, [importPreview]);
 
   const loadSample = useCallback(() => {
     if (!window.confirm('载入示例将覆盖当前全部数据，确定继续？')) return;
@@ -385,6 +445,17 @@ export default function App() {
           busy={busy}
           onSubmit={submitCard}
           onClose={() => setEditing(null)}
+        />
+      )}
+
+      {importPreview && (
+        <ImportPreviewModal
+          preview={importPreview.preview}
+          busy={busy}
+          stale={importStale}
+          onConfirm={confirmImport}
+          onRepreview={() => void requestImportPreview(importPreview.payload, importPreview.fileName)}
+          onClose={cancelImportPreview}
         />
       )}
     </div>

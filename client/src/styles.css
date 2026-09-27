@@ -1197,3 +1197,270 @@ body {
   gap: 10px;
   margin-top: 4px;
 }
+
+/* ---------- 导入差异预览弹窗 ---------- */
+
+.imp-modal {
+  width: min(760px, 100%);
+  max-height: calc(100vh - 60px);
+  display: flex;
+  flex-direction: column;
+  padding: 22px 24px 18px;
+}
+
+.imp-file {
+  margin: 0 0 12px;
+  word-break: break-all;
+}
+
+.imp-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.imp-chip {
+  font-size: 12.5px;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  border-radius: 999px;
+  padding: 4px 12px;
+  color: var(--muted);
+}
+
+.imp-chip.add {
+  color: var(--ok);
+  border-color: rgba(74, 222, 128, 0.45);
+}
+
+.imp-chip.del {
+  color: var(--danger);
+  border-color: rgba(255, 92, 108, 0.45);
+}
+
+.imp-chip.mod {
+  color: #f0a840;
+  border-color: rgba(240, 168, 64, 0.45);
+}
+
+.imp-chip.edge-add {
+  color: #22d3ee;
+  border-color: rgba(34, 211, 238, 0.45);
+}
+
+.imp-chip.edge-del {
+  color: #fb923c;
+  border-color: rgba(251, 146, 60, 0.45);
+}
+
+.imp-no-change {
+  font-size: 14px;
+  color: var(--muted);
+  background: var(--bg-soft);
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin: 0 0 10px;
+}
+
+.imp-sections {
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-right: 4px;
+}
+
+.imp-section {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-soft);
+  overflow: hidden;
+}
+
+.imp-section.imp-add {
+  border-color: rgba(74, 222, 128, 0.4);
+}
+
+.imp-section.imp-del {
+  border-color: rgba(255, 92, 108, 0.4);
+}
+
+.imp-section.imp-mod {
+  border-color: rgba(240, 168, 64, 0.4);
+}
+
+.imp-section.imp-edge-add {
+  border-color: rgba(34, 211, 238, 0.4);
+}
+
+.imp-section.imp-edge-del {
+  border-color: rgba(251, 146, 60, 0.4);
+}
+
+.imp-section-head {
+  width: 100%;
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+}
+
+.imp-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.imp-caret {
+  color: var(--muted);
+  width: 12px;
+}
+
+.imp-count {
+  font-size: 12.5px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 2px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+
+.imp-add .imp-count {
+  color: var(--ok);
+  border-color: rgba(74, 222, 128, 0.45);
+}
+
+.imp-del .imp-count {
+  color: var(--danger);
+  border-color: rgba(255, 92, 108, 0.45);
+}
+
+.imp-mod .imp-count {
+  color: #f0a840;
+  border-color: rgba(240, 168, 64, 0.45);
+}
+
+.imp-edge-add .imp-count {
+  color: #22d3ee;
+  border-color: rgba(34, 211, 238, 0.45);
+}
+
+.imp-edge-del .imp-count {
+  color: #fb923c;
+  border-color: rgba(251, 146, 60, 0.45);
+}
+
+.imp-section-body {
+  border-top: 1px solid var(--border);
+  padding: 10px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 300px;
+  overflow: auto;
+}
+
+.imp-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 9px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.imp-card-title {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.imp-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.imp-card-desc {
+  margin: 0;
+  font-size: 12.5px;
+  color: #c4cbe4;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.imp-fields {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.imp-fields li {
+  display: grid;
+  grid-template-columns: 64px 1fr auto 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.imp-field-name {
+  color: #f0a840;
+}
+
+.imp-before {
+  color: var(--danger);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.imp-arrow {
+  color: var(--muted);
+}
+
+.imp-after {
+  color: var(--ok);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.imp-edges {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 13px;
+}
+
+.imp-edges b {
+  color: var(--accent);
+}
+
+.imp-edge-del .imp-section-body b,
+.imp-edge.imp-edge-del-line b {
+  color: #fb923c;
+}
+
+.imp-stale {
+  margin: 12px 0 0;
+}
+
+.imp-actions {
+  margin-top: 14px;
+}

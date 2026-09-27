@@ -1,9 +1,23 @@
-import type { BypassPathResult, EvidenceFormValues, GraphState, MergeConflictKind, MustPassResult, OrderQueryResult, PruneResult, RedundantEdge, TimeWindowResult } from './types';
+import type { BypassPathResult, EvidenceFormValues, GraphState, ImportPreview, MergeConflictKind, MustPassResult, OrderQueryResult, PruneResult, RedundantEdge, TimeWindowResult } from './types';
 
 export class ApiError extends Error {
   status: number;
-  payload: { message?: string; cycle?: string[]; merge?: { kind: MergeConflictKind; path: string[] } };
-  constructor(status: number, payload: { message?: string; cycle?: string[]; merge?: { kind: MergeConflictKind; path: string[] } }) {
+  payload: {
+    message?: string;
+    cycle?: string[];
+    merge?: { kind: MergeConflictKind; path: string[] };
+    /** 导入确认时当前图或文件与预览不一致 */
+    stale?: boolean;
+  };
+  constructor(
+    status: number,
+    payload: {
+      message?: string;
+      cycle?: string[];
+      merge?: { kind: MergeConflictKind; path: string[] };
+      stale?: boolean;
+    },
+  ) {
     super(payload.message ?? `请求失败（${status}）`);
     this.status = status;
     this.payload = payload;
@@ -12,7 +26,12 @@ export class ApiError extends Error {
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
-  const data = (await res.json().catch(() => ({}))) as { message?: string; cycle?: string[]; merge?: { kind: MergeConflictKind; path: string[] } };
+  const data = (await res.json().catch(() => ({}))) as {
+    message?: string;
+    cycle?: string[];
+    merge?: { kind: MergeConflictKind; path: string[] };
+    stale?: boolean;
+  };
   if (!res.ok) throw new ApiError(res.status, data);
   return data as T;
 }
@@ -48,6 +67,8 @@ export const api = {
     request<TimeWindowResult>(
       `/api/time-window?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&gap=${encodeURIComponent(String(gapMinutes))}`,
     ),
-  importSnapshot: (payload: unknown) => request<GraphState>('/api/import', json('POST', payload)),
+  importPreview: (payload: unknown) => request<ImportPreview>('/api/import/preview', json('POST', payload)),
+  importSnapshot: (payload: unknown, token: string) =>
+    request<GraphState>('/api/import', json('POST', { ...(payload as Record<string, unknown>), token })),
   seed: () => request<GraphState>('/api/seed', { method: 'POST' }),
 };

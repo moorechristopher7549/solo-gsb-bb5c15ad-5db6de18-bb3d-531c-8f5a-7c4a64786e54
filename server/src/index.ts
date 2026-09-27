@@ -5,7 +5,18 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import { db, getEdges, getEvidence } from './db';
 import { analyzeMustPass, analyzeTimeWindow, cycleAfterAdding, findBypassPath, findCycle, findRedundantEdges, mergeConflict, planMergeEdges, planPrune, queryOrder, topoLevels } from './graph';
 import { resetWithSample, seedIfEmpty } from './seed';
-import type { BypassPathResult, Evidence, GraphState, MustPassResult, OrderQueryResult, OrderWitness, PruneResult, RedundancyReport, TimeWindowResult } from './types';
+import {
+  SnapshotValidationError,
+  currentGraphView,
+  diffSnapshots,
+  fingerprintGraph,
+  fingerprintSnapshot,
+  parseEvidenceInput,
+  parseSnapshot,
+  signPreviewToken,
+  verifyPreviewToken,
+} from './snapshot';
+import type { BypassPathResult, GraphState, ImportPreview, MustPassResult, OrderQueryResult, OrderWitness, PruneResult, RedundancyReport, TimeWindowResult } from './types';
 
 const app = express();
 app.use(express.json({ limit: '5mb' }));
@@ -18,40 +29,6 @@ function buildState(): GraphState {
   const levels = topoLevels(evidence.map((e) => e.id), edges) ?? {};
   const levelCount = Object.values(levels).reduce((m, l) => Math.max(m, l + 1), 0);
   return { evidence, edges, levels, levelCount };
-}
-
-/* ---------- 输入校验 ---------- */
-
-interface EvidenceInput {
-  title: string;
-  description: string;
-  source: string;
-  occurredAt: string | null;
-}
-
-function cleanString(v: unknown, max: number): string {
-  return typeof v === 'string' ? v.trim().slice(0, max) : '';
-}
-
-function parseEvidenceInput(body: unknown): { ok: true; value: EvidenceInput } | { ok: false; message: string } {
-  const b = (body ?? {}) as Record<string, unknown>;
-  const title = cleanString(b.title, 200);
-  if (!title) return { ok: false, message: '标题不能为空' };
-  let occurredAt: string | null = null;
-  if (typeof b.occurredAt === 'string' && b.occurredAt.trim()) {
-    const t = b.occurredAt.trim();
-    if (Number.isNaN(Date.parse(t))) return { ok: false, message: '发生时间格式无效' };
-    occurredAt = t;
-  }
-  return {
-    ok: true,
-    value: {
-      title,
-      description: cleanString(b.description, 2000),
-      source: cleanString(b.source, 200),
-      occurredAt,
-    },
-  };
 }
 
 /* ---------- 时间窗口分析的时间口径 ---------- */
@@ -450,62 +427,101 @@ app.get('/api/export', (_req, res) => {
   res.json(snapshot);
 });
 
-app.post('/api/import', (req, res) => {
-  const body = req.body as { evidence?: unknown; edges?: unknown };
-  if (!Array.isArray(body?.evidence) || !Array.isArray(body?.edges)) {
-    return res.status(400).json({ message: '快照格式错误：需要 evidence 与 edges 数组' });
+/** 确认导入时发现当前图或文件内容与预览时不一致：事务内抛出，整体回滚 */
+class ImportStaleError extends Error {
+  constructor() {
+    super('import preview stale');
   }
-  if (body.evidence.length > 2000 || body.edges.length > 10000) {
-    return res.status(400).json({ message: '快照过大，已拒绝导入' });
+}
+
+/** 事务内复核发现快照含环（预览已拦截，作为防御性兜底） */
+class SnapshotCycleError extends Error {
+  cycle: string[];
+  constructor(cycle: string[]) {
+    super('snapshot cycle');
+    this.cycle = cycle;
+  }
+}
+
+/**
+ * 差异预览（只读）：沿用导入校验解析快照，通过后按证据 id 比较四字段、
+ * 按连线两端 id 比较，返回新增 / 删除 / 修改明细及数量。
+ * 响应中的 token 把结果绑定到「当前图 + 文件内容指纹」，
+ * 确认导入时在事务内重新核对两者，任一变化即拒绝覆盖。
+ * 含环快照与正式导入一样拒绝（HTTP 422）。
+ */
+app.post('/api/import/preview', (req, res) => {
+  const now = new Date().toISOString();
+  let parsed;
+  try {
+    parsed = parseSnapshot(req.body, now);
+  } catch (e) {
+    if (e instanceof SnapshotValidationError) return res.status(400).json({ message: e.message });
+    throw e;
+  }
+  if (!parsed.ok) return res.status(parsed.status).json({ message: parsed.message });
+
+  const cycle = findCycle(parsed.value.items.map((i) => i.id), parsed.value.edges);
+  if (cycle) {
+    return res.status(422).json({ message: '快照中存在循环依赖，无法预览导入', cycle });
+  }
+
+  const view = currentGraphView(getEvidence(), getEdges());
+  const diff = diffSnapshots(view, parsed.value);
+  const token = signPreviewToken(fingerprintGraph(view), fingerprintSnapshot(parsed.value));
+  const result: ImportPreview = { ...diff, token };
+  res.json(result);
+});
+
+app.post('/api/import', (req, res) => {
+  const body = (req.body ?? {}) as { token?: unknown };
+  const token = verifyPreviewToken(body.token);
+  if (!token.ok) {
+    return res.status(400).json({ message: '请先进行导入差异预览，再确认导入' });
   }
 
   const now = new Date().toISOString();
-  const items: Evidence[] = [];
-  const seen = new Set<string>();
-  for (const raw of body.evidence as Array<Record<string, unknown>>) {
-    const parsed = parseEvidenceInput(raw);
-    if (!parsed.ok) return res.status(400).json({ message: `证据「${cleanString(raw?.title, 50) || '?'}」：${parsed.message}` });
-    const id = typeof raw?.id === 'string' && raw.id ? raw.id.slice(0, 64) : crypto.randomUUID();
-    if (seen.has(id)) return res.status(400).json({ message: `证据 id 重复：${id}` });
-    seen.add(id);
-    items.push({
-      id,
-      ...parsed.value,
-      createdAt: typeof raw?.createdAt === 'string' ? raw.createdAt : now,
-      updatedAt: now,
+  let parsed;
+  try {
+    parsed = parseSnapshot(req.body, now);
+  } catch (e) {
+    if (e instanceof SnapshotValidationError) return res.status(400).json({ message: e.message });
+    throw e;
+  }
+  if (!parsed.ok) return res.status(parsed.status).json({ message: parsed.message });
+
+  const { items, edges } = parsed.value;
+
+  try {
+    const tx = db.transaction(() => {
+      // 事务内重新校验绑定的两份指纹：图在预览后被改动，或文件内容与预览时不一致，都拒绝覆盖
+      const currentView = currentGraphView(getEvidence(), getEdges());
+      if (fingerprintGraph(currentView) !== token.graphFingerprint) throw new ImportStaleError();
+      if (fingerprintSnapshot(parsed.value) !== token.snapshotFingerprint) throw new ImportStaleError();
+
+      // 环检测同样在事务内复核（含环快照仍拒绝），通过后才整体替换
+      const cycle = findCycle(items.map((i) => i.id), edges);
+      if (cycle) throw new SnapshotCycleError(cycle);
+
+      db.prepare('DELETE FROM edges').run();
+      db.prepare('DELETE FROM evidence').run();
+      const insE = db.prepare(
+        'INSERT INTO evidence (id, title, description, source, occurred_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      );
+      for (const it of items) insE.run(it.id, it.title, it.description, it.source, it.occurredAt, it.createdAt, now);
+      const insX = db.prepare('INSERT INTO edges (from_id, to_id, created_at) VALUES (?, ?, ?)');
+      for (const e of edges) insX.run(e.fromId, e.toId, now);
     });
-  }
-
-  const edges: Array<{ fromId: string; toId: string }> = [];
-  const edgeSeen = new Set<string>();
-  for (const raw of body.edges as Array<Record<string, unknown>>) {
-    const fromId = raw?.from ?? raw?.fromId;
-    const toId = raw?.to ?? raw?.toId;
-    if (typeof fromId !== 'string' || typeof toId !== 'string' || !seen.has(fromId) || !seen.has(toId)) {
-      return res.status(400).json({ message: '存在指向未知证据的连线，快照已拒绝' });
+    tx();
+  } catch (e) {
+    if (e instanceof ImportStaleError) {
+      return res.status(409).json({ stale: true, message: '当前图或快照文件在预览后已变化，请重新预览后再导入' });
     }
-    const key = `${fromId}->${toId}`;
-    if (edgeSeen.has(key)) continue;
-    edgeSeen.add(key);
-    edges.push({ fromId, toId });
+    if (e instanceof SnapshotCycleError) {
+      return res.status(422).json({ message: '导入被拒绝：快照中存在循环依赖', cycle: e.cycle });
+    }
+    throw e;
   }
-
-  const cycle = findCycle(items.map((i) => i.id), edges);
-  if (cycle) {
-    return res.status(422).json({ message: '导入被拒绝：快照中存在循环依赖', cycle });
-  }
-
-  const tx = db.transaction(() => {
-    db.prepare('DELETE FROM edges').run();
-    db.prepare('DELETE FROM evidence').run();
-    const insE = db.prepare(
-      'INSERT INTO evidence (id, title, description, source, occurred_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    );
-    for (const it of items) insE.run(it.id, it.title, it.description, it.source, it.occurredAt, it.createdAt, it.updatedAt);
-    const insX = db.prepare('INSERT INTO edges (from_id, to_id, created_at) VALUES (?, ?, ?)');
-    for (const e of edges) insX.run(e.fromId, e.toId, now);
-  });
-  tx();
   res.json(buildState());
 });
 

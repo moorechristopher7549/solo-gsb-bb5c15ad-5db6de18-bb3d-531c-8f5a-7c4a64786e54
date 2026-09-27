@@ -172,3 +172,58 @@ export interface TimeWindowHighlight {
   /** 需要定位的越界固定卡 id 列表 */
   outOfRange: string[];
 }
+
+/* ---------- 导入差异预览（只读） ---------- */
+
+/** 预览中的卡片视图（当前图或快照文件） */
+export interface ImportCardView {
+  id: string;
+  title: string;
+  source: string;
+  occurredAt: string | null;
+  description: string;
+}
+
+/** 参与比较的卡片字段 */
+export type ImportDiffField = 'title' | 'source' | 'occurredAt' | 'description';
+
+export interface ImportFieldChange {
+  field: ImportDiffField;
+  before: string;
+  after: string;
+}
+
+/** 同 id 卡片中发生修改的一张及其逐字段变化 */
+export interface ImportModifiedCard {
+  id: string;
+  title: string;
+  changes: ImportFieldChange[];
+}
+
+/** 连线差异（按两端 id 比较） */
+export interface ImportEdgeChange {
+  fromId: string;
+  toId: string;
+  fromTitle: string;
+  toTitle: string;
+}
+
+/** POST /api/import/preview 响应：只读差异明细 + 绑定令牌 */
+export interface ImportPreview {
+  added: ImportCardView[];
+  deleted: ImportCardView[];
+  modified: ImportModifiedCard[];
+  edgesAdded: ImportEdgeChange[];
+  edgesDeleted: ImportEdgeChange[];
+  counts: {
+    added: number;
+    deleted: number;
+    modified: number;
+    edgesAdded: number;
+    edgesDeleted: number;
+  };
+  /** 确认导入时回传：绑定当前图与文件内容，变化即被服务端拒绝 */
+  token: string;
+  /** 快照文件名（仅前端展示用，服务端不感知） */
+  fileName?: string;
+}
